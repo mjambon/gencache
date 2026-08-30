@@ -15,6 +15,7 @@ type benchmark = {
   live: int list; (* all of these keys must exist in the cache when done *)
   dead: int list; (* none of these keys must exist in the cache when done *)
   cost: float; (* the expected cost of all values computations (cache misses) *)
+  savings: float; (* the expected savings on recomputations (cache hits) *)
 }
 
 let simple = {
@@ -31,6 +32,7 @@ let simple = {
   live = [4];
   dead = [];
   cost = 7.;
+  savings = 1.;
 }
 
 (*
@@ -45,6 +47,7 @@ let simple = {
 *)
 let run_benchmark (ben : benchmark) () =
   let cache = Cache.create 5. in
+  let hit_savings = ref 0. in
   let miss_cost = ref 0. in
   let get_put (k, size, cost) =
     match Cache.get cache k with
@@ -56,12 +59,14 @@ let run_benchmark (ben : benchmark) () =
           printf "evict %i\n" k;
         ) evictions
     | Some () ->
-        printf "hit %i\n" k
+        printf "hit %i\n" k;
+        hit_savings := !hit_savings +. cost
   in
   List.iter get_put ben.traffic;
   printf "Cache stats:\n";
   print_endline (Cache.show_stats (Cache.stats cache));
-  printf "Miss cost: %g\n" !miss_cost;
+  printf "Recomputation cost: %g\n" !miss_cost;
+  printf "Recomputation savings: %g\n" !hit_savings;
   List.iter (fun k ->
     if not (Cache.mem cache k) then
       Testo.fail (sprintf "key missing from the cache: %i\n" k)
@@ -70,7 +75,8 @@ let run_benchmark (ben : benchmark) () =
     if Cache.mem cache k then
       Testo.fail (sprintf "key should not be in cache: %i\n" k)
   ) ben.dead;
-  Testo.(check float) ~msg:"total miss cost" ben.cost !miss_cost
+  Testo.(check float) ~msg:"recomputation cost" ben.cost !miss_cost;
+  Testo.(check float) ~msg:"recomputation savings" ben.savings !hit_savings
 
 let tests = [
   Testo.create "simple" (run_benchmark simple);

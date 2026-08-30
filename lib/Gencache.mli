@@ -18,25 +18,6 @@
    in the cache.
 *)
 
-(** Cache entry stats. Subject to change. *)
-type entry_stats = private {
-  size: float; (** user-provided entry size *)
-  cost: float; (** user-provided cost of recomputing the cached value *)
-  frequency: float; (** recent access frequency *)
-  priority: float; (** priority score; smaller value = evict first *)
-}
-[@@deriving show]
-
-(** Cache stats. Subject to change. *)
-type cache_stats = private {
-  decay: float; (** parameter specified at cache creation time *)
-  min_fill: float; (** parameter specified at cache creation time *)
-  fill: float; (** sum of the sizes of the cache entries *)
-  clock: int; (** the clock incremented with each cache access *)
-  num_entries: int; (** number of cache entries *)
-}
-[@@deriving show]
-
 module type S = sig
   type key
   [@@deriving show]
@@ -135,19 +116,20 @@ module type S = sig
   (** Export the entries to a list. *)
   val to_list : 'v t -> (key * 'v) list
 
-  (** Subject to change. *)
-  type entry_stats_list = (key * entry_stats) list
+  type stats
   [@@deriving show]
 
-  (** Subject to change. *)
-  type stats = cache_stats * entry_stats_list
+  type short_stats
   [@@deriving show]
 
-  (** Export internal stats, sorted by decreasing priority score.
+  (** Export internal statistics about global cache activity and
+      invidual entries.
       Subject to change. *)
   val stats : 'v t -> stats
-  val cache_stats : 'v t -> cache_stats
-  val entry_stats_list : 'v t -> (key * entry_stats) list
+
+  (** Smaller dump than {!stats}.
+      Subject to change. *)
+  val short_stats : 'v t -> short_stats
 end
 
 (** Parameters needed for the functor application.

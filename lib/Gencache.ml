@@ -4,23 +4,6 @@
 
 open Printf
 
-type entry_stats = {
-  size: float;
-  cost: float;
-  frequency: float;
-  priority: float;
-}
-[@@deriving show { with_path = false }]
-
-type cache_stats = {
-  decay: float;
-  min_fill: float;
-  fill: float;
-  clock: int;
-  num_entries: int;
-}
-[@@deriving show { with_path = false }]
-
 module type Param = sig
   type t
   val hash : t -> int
@@ -56,15 +39,14 @@ module type S = sig
   val clear : 'v t -> unit
   val to_list : 'v t -> (key * 'v) list
 
-  type entry_stats_list = (key * entry_stats) list
+  type stats
   [@@deriving show]
 
-  type stats = cache_stats * entry_stats_list
+  type short_stats
   [@@deriving show]
 
   val stats : 'v t -> stats
-  val cache_stats : 'v t -> cache_stats
-  val entry_stats_list : 'v t -> entry_stats_list
+  val short_stats : 'v t -> short_stats
 end
 
 module Make (H: Param): (S with type key = H.t) =
@@ -104,15 +86,6 @@ struct
 
   let get_priority cache (e : _ entry) =
     (get_frequency cache e /. e.size) *. (e.cost /. e.size)
-
-  (* for reporting purposes *)
-  let get_entry_stats cache e : entry_stats =
-    {
-      size = e.size;
-      cost = e.cost;
-      frequency = get_frequency cache e;
-      priority = get_priority cache e;
-    }
 
   let access cache (e : _ entry) =
     let now = !(cache.clock) in
@@ -253,7 +226,33 @@ struct
   let to_list cache =
     Hashtbl.fold (fun k e acc -> (k, e.value) :: acc) cache.entries []
 
-  let cache_stats (cache : _ t) : cache_stats =
+  type single_entry_stats = {
+    size: float;
+    cost: float;
+    frequency: float;
+    priority: float;
+  }
+  [@@deriving show { with_path = false }]
+
+  type short_stats = {
+    decay: float;
+    min_fill: float;
+    fill: float;
+    clock: int;
+    num_entries: int;
+  }
+  [@@deriving show { with_path = false }]
+
+  type entry_stats = (key * single_entry_stats) list
+  [@@deriving show]
+
+  type stats = {
+    short_stats: short_stats;
+    entry_stats: entry_stats;
+  }
+  [@@deriving show { with_path = false }]
+
+  let short_stats (cache : _ t) : short_stats =
     {
       decay = cache.decay;
       min_fill = cache.min_fill;
@@ -262,18 +261,23 @@ struct
       num_entries = Hashtbl.length cache.entries;
     }
 
-  type entry_stats_list = (key * entry_stats) list
-  [@@deriving show]
+  let single_entry_stats cache (e : _ entry) : single_entry_stats =
+    {
+      size = e.size;
+      cost = e.cost;
+      frequency = get_frequency cache e;
+      priority = get_priority cache e;
+    }
 
-  type stats = cache_stats * entry_stats_list
-  [@@deriving show]
-
-  let entry_stats_list (cache : _ t) =
+  let entry_stats (cache : _ t) =
     Hashtbl.fold (fun k e acc ->
-      (k, get_entry_stats cache e) :: acc)
+      (k, single_entry_stats cache e) :: acc)
       cache.entries []
     |> fast_sort (fun (_, a) (_, b) -> Float.compare b.priority a.priority)
 
   let stats cache =
-    (cache_stats cache, entry_stats_list cache)
+    {
+      short_stats = short_stats cache;
+      entry_stats = entry_stats cache;
+    }
 end
