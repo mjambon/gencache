@@ -28,20 +28,21 @@ module type Cache = sig
 
   (** Create a cache of size capacity 1.0.
 
-      @param decay is the decay factor
+      @param decay is the decay factor per cycle
       (1 - α where α is the so-called smoothing factor) used to compute
       recent access frequencies of cache entries as exponential moving
-      averages (EMA).
-      At each clock tick triggered by a cache access,
-      the previous access frequency of an entry is
-      multiplied by [decay]. For the entry being accessed,
-      [1 - decay] is added to form the entry's updated access frequency.
-      The default value of [decay] is 0.9. It must be positive and less
-      than 1.0. A value closer to 1 increases the "window" used to
-      compute the recent access frequency of a cache entry, causing
-      the cache to react more slowly to changes in access patterns.
-      Conversely, a smaller value shrinks this window, giving more
-      weight to more recent accesses.
+      averages (EMA). A cycle equals to accessing one full cache worth
+      of data. A clock tick is a clock increment that is in general not
+      a constant. The clock increment is the size
+      of the entry being accessed relative to the cache capacity.
+      Each time an entry is accessed, the clock is incremented
+      and the access frequency estimate [ema] for this entry is updated
+      as follows: [ema] <- (1-[decay]) + [decay]^[elapsed] * [ema],
+      where [elapsed] is the time elapsed since the last update.
+      The default value of [decay] is 0.9 meaning that an entry's
+      access frequency observed during the last cycle weighs
+      10% in the average, then 9% after two cycles, 8.1% after three cycles
+      and so on.
 
       @param min_fill is the target cache occupancy after a collection pass.
       The default is 0.8. It must be positive and less than 1.
@@ -139,7 +140,7 @@ module type Param = sig
   (** The type of cache key *)
   type t
 
-  (** Here, [Hashtbl.hash] will work on simple keys. *)
+  (** Here, [Hashtbl.hash] will work on simple immutable keys. *)
   val hash : t -> int
 
   (** Here, [(=)] will work on simple keys. *)
@@ -150,6 +151,11 @@ module type Param = sig
 end
 
 (** Functor needed to create a usable cache module.
+
     It is used similarly to the [Hashtbl.Make] functor of the standard
     library. *)
 module Make (P : Param) : Cache with type key = P.t
+
+(** Produce a module implementing single-generation caches.
+    A normal two-generation cache uses two of these. *)
+module Make_naive (P : Param) : Cache with type key = P.t

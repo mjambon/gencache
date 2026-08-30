@@ -49,7 +49,7 @@ module type Cache = sig
   val short_stats : 'v t -> short_stats
 end
 
-module Make (Param: Param): (Cache with type key = Param.t) =
+module Make_naive (Param: Param): (Cache with type key = Param.t) =
 struct
   type key = Param.t
 
@@ -62,11 +62,11 @@ struct
     value: 'v;
     size: float;
     cost: float;
-    mutable last_access: int;
+    mutable last_access: float;
     mutable exponential_moving_frequency: float;
   }
 
-  (* 'decay' is a decay factor per clock tick, used to compute frequency as
+  (* 'decay' is a decay factor over 1 cycle, used to compute frequency as
     an exponential moving average.
     See https://en.wikipedia.org/wiki/Exponential_smoothing *)
   type 'v t = {
@@ -76,12 +76,15 @@ struct
     min_fill: float;
     (* mutable state *)
     mutable fill: float;
-    clock: int ref;
+    clock: float ref;  (* incremented at irregular increments which are
+                          an entry's size relative to the cache capacity.
+                          The unit is one cycle which corresponds to
+                          accessing one cache's worth of data. *)
     entries: 'v entry Hashtbl.t;
   }
 
   let get_frequency cache (e : _ entry) =
-    let dt = float (!(cache.clock) - e.last_access) in
+    let dt = !(cache.clock) -. e.last_access in
     (cache.decay ** dt) *. e.exponential_moving_frequency
 
   let get_priority cache (e : _ entry) =
@@ -89,7 +92,7 @@ struct
 
   let access cache (e : _ entry) =
     let now = !(cache.clock) in
-    let dt = float (now - e.last_access) in
+    let dt = now -. e.last_access in
     if dt > 0. then (
       let emf = e.exponential_moving_frequency in
       let decay = cache.decay in
@@ -124,11 +127,11 @@ struct
     }
 
   let create ?decay ?min_fill capacity =
-    create_shared ?decay ?min_fill ~clock:(ref 0) capacity
+    create_shared ?decay ?min_fill ~clock:(ref 0.) capacity
 
   let clear cache =
     cache.fill <- 0.;
-    cache.clock := 0;
+    cache.clock := 0.;
     Hashtbl.clear cache.entries
 
   (* The entry must exist in the table to not screw up fill ratio tracking *)
@@ -177,9 +180,7 @@ struct
 
   let access_entry cache e =
     let clock = cache.clock in
-    if !clock = max_int then
-      ksprintf failwith "Cache clock overflow: %d" !clock;
-    incr clock;
+    clock := !clock +. e.size /. cache.capacity;
     access cache e
 
   let get cache k =
@@ -206,7 +207,8 @@ struct
     remove cache k;
     (* Guess an average initial value for the frequency:
        assume the entry is hit proportionally to the size it occupies in the
-       cache. *)
+       cache. The access frequency of a hypothetical entry that fills up
+       the cache is 1. *)
     let initial_frequency = size /. cache.capacity in
     let e = {
       value = v;
@@ -238,7 +240,7 @@ struct
     decay: float;
     min_fill: float;
     fill: float;
-    clock: int;
+    clock: float;
     num_entries: int;
   }
   [@@deriving show { with_path = false }]
@@ -281,3 +283,6 @@ struct
       entry_stats = entry_stats cache;
     }
 end
+
+(* TODO: generational cache *)
+module Make (Param: Param) = Make_naive (Param)
