@@ -18,7 +18,7 @@
    in the cache.
 *)
 
-module type S = sig
+module type Cache = sig
   type key
   [@@deriving show]
 
@@ -149,6 +149,7 @@ module type Param = sig
   val show : t -> string
 end
 
-(** This is the functor needed to create a usable cache module.
-    It has the same requirements as [Hashtbl.Make] and is used similarly. *)
-module Make (H : Param) : S with type key = H.t
+(** Functor needed to create a usable cache module.
+    It is used similarly to the [Hashtbl.Make] functor of the standard
+    library. *)
+module Make (P : Param) : Cache with type key = P.t

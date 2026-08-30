@@ -11,7 +11,7 @@ module type Param = sig
   val show : t -> string
 end
 
-module type S = sig
+module type Cache = sig
   type key
   [@@deriving show]
 
@@ -49,14 +49,14 @@ module type S = sig
   val short_stats : 'v t -> short_stats
 end
 
-module Make (H: Param): (S with type key = H.t) =
+module Make (Param: Param): (Cache with type key = Param.t) =
 struct
-  type key = H.t
+  type key = Param.t
 
-  let show_key = H.show
+  let show_key = Param.show
   let pp_key fmt key = Format.pp_print_string fmt (show_key key)
 
-  module Hashtbl = Hashtbl.Make (H)
+  module Hashtbl = Hashtbl.Make (Param)
 
   type 'v entry = {
     value: 'v;
