@@ -1,0 +1,8 @@
+(test
+  (name Test_gencache)
+  (libraries
+    gencache
+    testo
+    unix
+  )
+)

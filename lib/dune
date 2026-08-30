@@ -1,0 +1,9 @@
+(library
+  (public_name gencache)
+  (name gencache)
+  (preprocess
+    (pps
+      ppx_deriving.show
+    )
+  )
+)
