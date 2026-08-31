@@ -4,13 +4,22 @@
 
 open Printf
 
+module Naive_cache =
+  Gencache.Make_naive (struct
+    include Int
+    let show = Int.to_string
+  end)
+
 module Cache =
   Gencache.Make (struct
     include Int
     let show = Int.to_string
   end)
 
+module type Cache = module type of Cache
+
 type benchmark = {
+  capacity: float;
   traffic: (int * float * float) list; (* (key, size, cost) *)
   live: int list; (* all of these keys must exist in the cache when done *)
   dead: int list; (* none of these keys must exist in the cache when done *)
@@ -19,6 +28,7 @@ type benchmark = {
 }
 
 let simple = {
+  capacity = 5.;
   traffic = [
     (1, 1., 1.);
     (2, 1., 1.);
@@ -28,6 +38,47 @@ let simple = {
     (5, 1., 1.);
     (6, 1., 1.);
     (7, 1., 1.);
+  ];
+  live = [4];
+  dead = [];
+  cost = 7.;
+  savings = 1.;
+}
+
+let advanced = {
+  capacity = 20.;
+  traffic = [
+    (1, 1., 1.);
+    (2, 1., 1.);
+    (3, 1., 1.);
+    (4, 1., 1.);
+    (4, 1., 1.);
+    (5, 1., 1.);
+    (6, 1., 1.);
+    (8, 1., 1.);
+    (9, 1., 1.);
+    (10, 1., 1.);
+    (11, 1., 1.);
+    (12, 1., 1.);
+    (13, 1., 1.);
+    (14, 1., 1.);
+    (15, 1., 1.);
+    (4, 1., 1.);
+    (16, 1., 1.);
+    (17, 1., 1.);
+    (18, 1., 1.);
+    (19, 1., 1.);
+    (20, 1., 1.);
+    (21, 1., 1.);
+    (22, 1., 1.);
+    (23, 1., 1.);
+    (24, 1., 1.);
+    (25, 1., 1.);
+    (26, 1., 1.);
+    (27, 1., 1.);
+    (28, 1., 1.);
+    (29, 1., 1.);
+    (30, 1., 1.);
   ];
   live = [4];
   dead = [];
@@ -45,8 +96,9 @@ let simple = {
 
    Input format: (key, size, cost)
 *)
-let run_benchmark (ben : benchmark) () =
-  let cache = Cache.create 5. in
+let run_benchmark cache_impl (ben : benchmark) () =
+  let module Cache = (val cache_impl : Cache) in
+  let cache = Cache.create ben.capacity in
   let hit_savings = ref 0. in
   let miss_cost = ref 0. in
   let get_put (k, size, cost) =
@@ -79,7 +131,8 @@ let run_benchmark (ben : benchmark) () =
   Testo.(check float) ~msg:"recomputation savings" ben.savings !hit_savings
 
 let tests = [
-  Testo.create "simple" (run_benchmark simple);
+  Testo.create "simple" (run_benchmark (module Naive_cache) simple);
+  Testo.create "advanced" (run_benchmark (module Cache) advanced);
 ]
 
 let () =

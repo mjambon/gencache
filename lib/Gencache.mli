@@ -44,6 +44,12 @@ module type Cache = sig
       10% in the average, then 9% after two cycles, 8.1% after three cycles
       and so on.
 
+      @param major_share is the fraction of the cache's capacity that
+      should be reserved for the entries in the major subcache i.e. the
+      one holding entries for which we know the access frequency
+      reliably.
+      The default is 0.6.
+
       @param min_fill is the target cache occupancy after a collection pass.
       The default is 0.8. It must be positive and less than 1.
 
@@ -51,6 +57,7 @@ module type Cache = sig
   *)
   val create :
     ?decay:float ->
+    ?major_share:float ->
     ?min_fill:float ->
     float -> 'v t
 
