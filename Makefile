@@ -4,6 +4,7 @@ build:
 
 .PHONY: test
 test:
+	ln -sf _build/default/tests/Test_gencache.exe test
 	dune exec ./tests/Test_gencache.exe
 
 .PHONY: setup

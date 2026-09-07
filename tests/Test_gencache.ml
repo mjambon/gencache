@@ -23,38 +23,92 @@ type benchmark = {
   traffic: (int * float * float) list; (* (key, size, cost) *)
   live: int list; (* all of these keys must exist in the cache when done *)
   dead: int list; (* none of these keys must exist in the cache when done *)
-  cost: float; (* the expected cost of all values computations (cache misses) *)
-  savings: float; (* the expected savings on recomputations (cache hits) *)
+  cost: float; (* expected cost of all value computations (cache misses) *)
+  savings: float; (* expected savings on recomputations (cache hits) *)
 }
 
-let simple = {
+let repeat = {
   capacity = 5.;
+  traffic = [
+    (1, 1., 1.);
+    (1, 1., 1.);
+    (1, 1., 1.);
+    (1, 1., 1.);
+    (1, 1., 1.);
+    (1, 1., 1.);
+    (1, 1., 1.);
+  ];
+  live = [1];
+  dead = [];
+  cost = 1.;
+  savings = 6.;
+}
+
+let never_repeat = {
+  capacity = 6.;
   traffic = [
     (1, 1., 1.);
     (2, 1., 1.);
     (3, 1., 1.);
     (4, 1., 1.);
-    (4, 1., 1.);
     (5, 1., 1.);
     (6, 1., 1.);
     (7, 1., 1.);
   ];
-  live = [4];
+  live = [6; 7];
   dead = [];
   cost = 7.;
-  savings = 1.;
+  savings = 0.;
 }
 
-let advanced = {
+let never_repeat_naive = {
+  never_repeat with
+  live = [5; 6; 7];
+  dead = [1; 2; 3];
+}
+
+let reuse = {
+  capacity = 6.;
+  traffic = [
+    (* fill the major cache (initialization phase) *)
+    (1, 1., 1.);
+    (2, 1., 1.);
+    (3, 1., 1.);
+    (* add '4' to the minor cache enough times to allow a promotion *)
+    (4, 1., 1.);
+    (4, 1., 1.);
+    (4, 1., 1.);
+    (* fill the minor cache to trigger a promotion for '4' *)
+    (5, 1., 1.);
+    (6, 1., 1.);
+    (7, 1., 1.);
+    (8, 1., 1.);
+    (9, 1., 1.);
+    (10, 1., 1.);
+    (11, 1., 1.);
+  ];
+  live = [4];
+  dead = [5];
+  cost = 11.;
+  savings = 2.;
+}
+
+let reuse_naive = {
+  reuse with
+  live = [4];
+  dead = [3; 5];
+}
+
+let medium = {
   capacity = 20.;
   traffic = [
     (1, 1., 1.);
     (2, 1., 1.);
     (3, 1., 1.);
     (4, 1., 1.);
-    (4, 1., 1.);
     (5, 1., 1.);
     (6, 1., 1.);
+    (7, 1., 1.);
     (8, 1., 1.);
     (9, 1., 1.);
     (10, 1., 1.);
@@ -63,15 +117,25 @@ let advanced = {
     (13, 1., 1.);
     (14, 1., 1.);
     (15, 1., 1.);
-    (4, 1., 1.);
     (16, 1., 1.);
     (17, 1., 1.);
     (18, 1., 1.);
     (19, 1., 1.);
     (20, 1., 1.);
+    (* at this point, we're past the initial filling of the major cache *)
+    (* promote 3 entries to the major cache *)
     (21, 1., 1.);
+    (21, 1., 1.);
+    (21, 1., 1.);
+    (***********)
     (22, 1., 1.);
+    (22, 1., 1.);
+    (22, 1., 1.);
+    (***********)
     (23, 1., 1.);
+    (23, 1., 1.);
+    (23, 1., 1.);
+    (***********)
     (24, 1., 1.);
     (25, 1., 1.);
     (26, 1., 1.);
@@ -79,11 +143,27 @@ let advanced = {
     (28, 1., 1.);
     (29, 1., 1.);
     (30, 1., 1.);
-  ];
-  live = [4];
-  dead = [];
-  cost = 7.;
-  savings = 1.;
+  ] @
+    (* fill the minor cache many times without affecting the major cache *)
+    List.init 970 (fun i -> (31 + i, 1., 1.))
+    @ [
+      (* find our old entries in the major cache *)
+      (21, 1., 1.);
+      (22, 1., 1.);
+      (23, 1., 1.);
+    ];
+  live = [21; 22; 23];
+  dead = [24; 900];
+  cost = 1000.;
+  savings = 9.;
+}
+
+(* With a non-generational cache, the old cached entries are evicted,
+   incurring extra recomputation costs. *)
+let medium_naive = {
+  medium with
+  cost = 1003.;
+  savings = 6.;
 }
 
 (*
@@ -130,9 +210,25 @@ let run_benchmark cache_impl (ben : benchmark) () =
   Testo.(check float) ~msg:"recomputation cost" ben.cost !miss_cost;
   Testo.(check float) ~msg:"recomputation savings" ben.savings !hit_savings
 
+let test_naive name ben =
+  Testo.create ~category:["naive"]
+    name
+    (run_benchmark (module Naive_cache) ben)
+
+let test_gen name ben =
+  Testo.create ~category:["generational"]
+    name
+    (run_benchmark (module Cache) ben)
+
 let tests = [
-  Testo.create "simple" (run_benchmark (module Naive_cache) simple);
-  Testo.create "advanced" (run_benchmark (module Cache) advanced);
+  test_naive "repeat" repeat;
+  test_gen "repeat" repeat;
+  test_naive "never repeat" never_repeat_naive;
+  test_gen "never repeat" never_repeat;
+  test_naive "reuse" reuse_naive;
+  test_gen "reuse" reuse;
+  test_naive "medium" medium_naive;
+  test_gen "medium" medium;
 ]
 
 let () =
