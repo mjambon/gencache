@@ -51,6 +51,7 @@ module type Cache = sig
     ?decay:float ->
     ?major_share:float ->
     ?min_fill:float ->
+    ?min_reuses_for_promotion:int ->
     float -> 'v t
 
   val get : 'v t -> key -> 'v option
@@ -166,7 +167,14 @@ struct
       entries = Hashtbl.create 100;
     }
 
-  let create ?decay ?major_share ?min_fill capacity =
+  let create ?decay ?major_share ?min_fill ?min_reuses_for_promotion capacity =
+    (match min_reuses_for_promotion with
+     | None -> ()
+     | Some _ ->
+         ksprintf invalid_arg
+           "Gencache create: the option 'min_reuses_for_promotion' \
+            is ignored for a naive cache"
+    );
     create_shared ?decay ?major_share ?min_fill
       ~clock:(Clock.create capacity) capacity
 
@@ -219,14 +227,13 @@ struct
     |> fast_sort (fun (p1, _, _) (p2, _, _) -> Float.compare p1 p2)
     |> remove_bottom_entries [] cache
 
-  let is_promotable e =
-    (* at least two reuses *)
-    e.access_count >= 3
+  let is_promotable ~min_reuses_for_promotion e =
+    e.access_count >= 1 + min_reuses_for_promotion
 
-  let remove_promotable_entries cache =
+  let remove_promotable_entries ~min_reuses_for_promotion cache =
     let removed_entries =
       Hashtbl.fold (fun k e acc ->
-        if is_promotable e then
+        if is_promotable ~min_reuses_for_promotion e then
           (k, e) :: acc
         else
           acc
@@ -396,20 +403,28 @@ module Make (Param: Param): (Cache with type key = Param.t) = struct
   type 'v t = {
     total_capacity: float;
     major_share: float;
+    min_reuses_for_promotion: int;
     minor: 'v Subcache.t;
     major: 'v Subcache.t;
   }
 
-  let create ?decay ?(major_share = 0.6) ?min_fill total_capacity =
+  let create
+      ?decay ?(major_share = 0.6) ?min_fill
+      ?(min_reuses_for_promotion = 2) total_capacity =
     if not (major_share > 0. && major_share < 1.) then
       ksprintf invalid_arg
         "Gencache create: invalid major_share: %g" major_share;
+     if not (min_reuses_for_promotion >= 0) then
+      ksprintf invalid_arg
+        "Gencache create: invalid min_reuses_for_promotion: %d"
+        min_reuses_for_promotion;
     let major_capacity = major_share *. total_capacity in
     let minor_capacity = (1. -. major_share) *. total_capacity in
     let clock = Clock.create total_capacity in
     {
       total_capacity;
       major_share;
+      min_reuses_for_promotion;
       minor = Subcache.create_shared ?decay ?min_fill ~clock minor_capacity;
       major = Subcache.create_shared ?decay ?min_fill ~clock major_capacity;
     }
@@ -424,7 +439,11 @@ module Make (Param: Param): (Cache with type key = Param.t) = struct
      It transfers suitable entries from the minor cache to the major cache.
   *)
   let promote cache () =
-    let entries = Subcache.remove_promotable_entries cache.minor in
+    let entries =
+      Subcache.remove_promotable_entries
+        ~min_reuses_for_promotion:cache.min_reuses_for_promotion
+        cache.minor
+    in
     let evicted =
       List.fold_left (fun acc (k, entry) ->
         List.rev_append
@@ -478,6 +497,7 @@ module Make (Param: Param): (Cache with type key = Param.t) = struct
     occupancy: float;
     minor_share: float;
     major_share: float;
+    min_reuses_for_promotion: int;
     minor: Subcache.short_stats;
     major: Subcache.short_stats;
   }
@@ -488,6 +508,7 @@ module Make (Param: Param): (Cache with type key = Param.t) = struct
     occupancy: float;
     minor_share: float;
     major_share: float;
+    min_reuses_for_promotion: int;
     minor: Subcache.stats;
     major: Subcache.stats;
   }
@@ -501,6 +522,7 @@ module Make (Param: Param): (Cache with type key = Param.t) = struct
       occupancy = minor.occupancy +. major.occupancy;
       minor_share = 1. -. cache.major_share;
       major_share = cache.major_share;
+      min_reuses_for_promotion = cache.min_reuses_for_promotion;
       minor;
       major;
     }
@@ -513,6 +535,7 @@ module Make (Param: Param): (Cache with type key = Param.t) = struct
       occupancy = minor.short_stats.occupancy +. major.short_stats.occupancy;
       minor_share = 1. -. cache.major_share;
       major_share = cache.major_share;
+      min_reuses_for_promotion = cache.min_reuses_for_promotion;
       minor;
       major;
     }

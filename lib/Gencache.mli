@@ -53,12 +53,17 @@ module type Cache = sig
       @param min_fill is the target cache occupancy after a collection pass.
       The default is 0.8. It must be positive and less than 1.
 
+      @param min_reuses_for_promotion specifies the minimum number of times
+      a minor cache entry must be reused (number of cache hits) to guarantee
+      an eventual promotion to the major cache. The default is 2.
+
       @raise Invalid_argument on invalid parameters
   *)
   val create :
     ?decay:float ->
     ?major_share:float ->
     ?min_fill:float ->
+    ?min_reuses_for_promotion:int ->
     float -> 'v t
 
   (** Get an element from the cache. It may not exist even if it was added
