@@ -158,6 +158,8 @@ let medium = {
   savings = 9.;
 }
 
+(* With a non-generational cache, the old cached entries are evicted,
+   incurring extra recomputation costs. *)
 let medium_naive = {
   medium with
   cost = 1003.;
