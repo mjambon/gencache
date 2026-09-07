@@ -3,8 +3,8 @@
 This is a general-purpose cache library for OCaml applications. It is
 suitable for caching medium to large objects in memory (kilobytes and
 beyond). It is scan-resistant i.e. if flooded with new entries that
-are never reused, older entries with a history of reuse won't be evicted
-from the cache. Object size and recomputation cost can be provided by
+are never reused, older entries with a history of reuse won't be
+evicted. Object size and recomputation cost can be provided by
 the user for optimal performance.
 
 Goals:
