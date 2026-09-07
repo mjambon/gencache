@@ -26,7 +26,8 @@ module type Cache = sig
       evicted at any time to make room for newer entries. *)
   type 'v t
 
-  (** Create a cache of size capacity 1.0.
+  (** Create a cache of a given capacity expressed in the same arbitrary
+      unit as the entry sizes.
 
       @param decay is the decay factor per cycle
       (1 - α where α is the so-called smoothing factor) used to compute
@@ -81,7 +82,7 @@ module type Cache = sig
       size and recomputation cost.
 
       If a binding already exists, it is replaced with a fresh entry that
-      resets size, boost, and access stats.
+      resets size, cost, and access stats.
 
       If the cache is full as a result, a collection is triggered,
       costing O(n log n) where n is the number of entries.
@@ -95,15 +96,14 @@ module type Cache = sig
       expressed in arbitrary units. It defaults to [size].
       A common alternative is to set it to a constant regardless of [size].
 
-      @param size is the entry's estimated size relative to the cache's
-      capacity. It may not exceed 1.0. For example, a value of 0.01 indicates
-      that the entry occupies 1% of the cache's capacity. The declared size
-      is only a number that should reflect the cost of keeping the object
-      in memory, not necessarily just the number of bytes used.
-      Keep in mind that long-lived, highly-fragmented objects may incur
-      significant garbage collector scanning costs.
+      @param size is the entry's estimated size expressed in the same unit
+      as the cache's capacity. The declared size is only a number that should
+      reflect the cost of keeping the object in memory, not necessarily
+      just the number of bytes used. Keep in mind that long-lived,
+      highly-fragmented objects may incur significant garbage collector
+      scanning costs. The default size is [1.0].
 
-      @raise Invalid_argument on an invalid boost or size
+      @raise Invalid_argument on an invalid cost or size
   *)
   val put :
     ?cost:float ->
@@ -136,7 +136,7 @@ module type Cache = sig
   [@@deriving show]
 
   (** Export internal statistics about global cache activity and
-      invidual entries.
+      individual entries.
       Subject to change. *)
   val stats : 'v t -> stats
 
