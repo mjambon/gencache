@@ -4,6 +4,8 @@
 
 open Printf
 
+let default_size = 1.
+
 module Clock : sig
   type t = private {
     capacity: float; (** amount of data accessed during one cycle *)
@@ -78,20 +80,7 @@ module type Cache = sig
   val short_stats : 'v t -> short_stats
 end
 
-(** Extended interface used for communication between minor and major caches *)
-module type Internal_cache = sig
-  include Cache
-
-  (** Because minor and major caches share their clock *)
-  val create_shared :
-    ?decay:float ->
-    ?major_share:float ->
-    ?min_fill:float ->
-    clock: Clock.t ->
-    float -> 'v t
-end
-
-module Make_naive (Param: Param): (Internal_cache with type key = Param.t) =
+module Make_naive (Param: Param) =
 struct
   type key = Param.t
 
@@ -104,6 +93,7 @@ struct
     value: 'v;
     size: float;
     cost: float;
+    mutable access_count: int; (* includes the 'put' *)
     mutable last_access: float;
     mutable exponential_moving_frequency: float;
   }
@@ -117,6 +107,7 @@ struct
     decay: float;
     min_fill: float;
     (* mutable state *)
+    mutable initializing: bool; (* turns false at the first collection *)
     mutable fill: float;
     clock: Clock.t;
     entries: 'v entry Hashtbl.t;
@@ -133,6 +124,7 @@ struct
     let now = cache.clock.time in
     let dt = now -. e.last_access in
     if dt > 0. then (
+      e.access_count <- e.access_count + 1;
       let emf = e.exponential_moving_frequency in
       let decay = cache.decay in
       e.last_access <- now;
@@ -169,6 +161,7 @@ struct
       decay;
       min_fill;
       fill = 0.;
+      initializing = true;
       clock;
       entries = Hashtbl.create 100;
     }
@@ -176,6 +169,12 @@ struct
   let create ?decay ?major_share ?min_fill capacity =
     create_shared ?decay ?major_share ?min_fill
       ~clock:(Clock.create capacity) capacity
+
+  let initialization_free_space cache =
+    if cache.initializing then
+      Some ((1. -. cache.fill) *. cache.capacity)
+    else
+      None
 
   let clear cache =
     cache.fill <- 0.;
@@ -212,6 +211,7 @@ struct
      and remove bottom-scoring entries until the cache occupancy
      reaches the min_fill threshold. *)
   let run_collection cache =
+    cache.initializing <- false;
     Hashtbl.fold (fun k e acc ->
         let priority = get_priority cache e in
         (priority, k, e) :: acc
@@ -219,9 +219,32 @@ struct
     |> fast_sort (fun (p1, _, _) (p2, _, _) -> Float.compare p1 p2)
     |> remove_bottom_entries [] cache
 
-  let check cache =
-    if cache.fill >= 1. then
-      run_collection cache
+  let is_promotable e =
+    (* at least two reuses *)
+    e.access_count >= 3
+
+  let remove_promotable_entries cache =
+    let removed_entries =
+      Hashtbl.fold (fun k e acc ->
+        if is_promotable e then
+          (k, e) :: acc
+        else
+          acc
+      ) cache.entries []
+    in
+    List.iter (fun (k, _) -> remove cache k) removed_entries;
+    removed_entries
+
+  let check ?promote cache =
+    if cache.fill >= 1. then (
+      let major_evictions =
+        match promote with
+        | None -> []
+        | Some promote -> promote ()
+      in
+      let evictions = run_collection cache in
+      List.rev_append major_evictions evictions
+    )
     else
       []
 
@@ -241,7 +264,18 @@ struct
   let mem cache k =
     Hashtbl.mem cache.entries k
 
-  let put_full ?cost ?(size = 1.) cache k v =
+  let put_entry ?promote ~count_access cache k e =
+    cache.fill <- cache.fill +. (e.size /. cache.capacity);
+    Hashtbl.add cache.entries k e;
+    if count_access then
+      access_entry cache e;
+    check ?promote cache
+
+  let put_internal
+      ?cost
+      ?promote
+      ?(size = default_size)
+      cache k v =
     let cost = Option.value cost ~default:size in
     if not (size > 0.) then
       ksprintf invalid_arg "Gencache put: invalid size value: %g" size;
@@ -261,16 +295,27 @@ struct
       value = v;
       size;
       cost;
+      access_count = 0;
       last_access = cache.clock.time;
       exponential_moving_frequency = initial_frequency;
     } in
-    cache.fill <- cache.fill +. (size /. cache.capacity);
-    Hashtbl.add cache.entries k e;
-    access_entry cache e;
-    check cache
+    put_entry ?promote ~count_access:true cache k e
 
-  let put ?cost ?size cache k v =
+   let put_full ?cost ?size cache k v =
+     put_internal ?cost ?size cache k v
+
+   let put ?cost ?size cache k v =
     put_full ?cost ?size cache k v |> ignore
+
+  (*
+     Used to receive a promoted entry from the minor cache
+     into the major cache. The entry is imported as-is.
+
+     It's important that the frequency be preserved.
+     Unlike a regular 'put', this doesn't count as an access.
+  *)
+  let import_promoted_entry cache k e =
+    put_entry ~count_access:false cache k e
 
   let to_list cache =
     Hashtbl.fold (fun k e acc -> (k, e.value) :: acc) cache.entries []
@@ -284,6 +329,8 @@ struct
   [@@deriving show { with_path = false }]
 
   type short_stats = {
+    capacity: float; (* maximum space that could be occupied by the entries *)
+    occupancy: float; (* space occupied by the entries *)
     decay: float;
     min_fill: float;
     fill: float;
@@ -303,6 +350,8 @@ struct
 
   let short_stats (cache : _ t) : short_stats =
     {
+      capacity = cache.capacity;
+      occupancy = cache.fill *. cache.capacity;
       decay = cache.decay;
       min_fill = cache.min_fill;
       fill = cache.fill;
@@ -370,10 +419,41 @@ module Make (Param: Param): (Cache with type key = Param.t) = struct
     | None -> Subcache.get cache.minor k
     | some -> some
 
-  let put_full ?cost ?size cache k v =
+  (*
+     This function is called just before a minor collection.
+     It transfers suitable entries from the minor cache to the major cache.
+  *)
+  let promote cache () =
+    let entries = Subcache.remove_promotable_entries cache.minor in
+    let evicted =
+      List.fold_left (fun acc (k, entry) ->
+        List.rev_append
+          (Subcache.import_promoted_entry cache.major k entry)
+          acc
+      ) [] entries
+    in
+    evicted
+
+  (*
+     Add an entry to the minor cache. It it already exists in the major
+     cache, it must be removed.
+
+     During the initialization phase however, i.e. when the major cache hasn't
+     filled up yet, entries are added directly to the major cache.
+  *)
+  let put_full ?cost ?(size = default_size) cache k v =
     Subcache.remove cache.major k;
-    (* TODO: promote from minor to major before minor collection *)
-    Subcache.put_full ?cost ?size cache.minor k v
+    match Subcache.initialization_free_space cache.major with
+    | Some available_space when size < 0.99 *. available_space ->
+        let evicted = Subcache.put_full ?cost ~size cache.major k v in
+        assert (evicted = []);
+        []
+    | _ ->
+        (* Return evicted entries:
+           - from the major cache due to promotions;
+           - from the minor cache *)
+        Subcache.put_internal
+          ?cost ~size ~promote:(promote cache) cache.minor k v
 
   let put ?cost ?size cache k v =
     put_full ?cost ?size cache k v |> ignore
@@ -395,6 +475,8 @@ module Make (Param: Param): (Cache with type key = Param.t) = struct
 
   type short_stats = {
     total_capacity: float;
+    occupancy: float;
+    minor_share: float;
     major_share: float;
     minor: Subcache.short_stats;
     major: Subcache.short_stats;
@@ -403,6 +485,8 @@ module Make (Param: Param): (Cache with type key = Param.t) = struct
 
   type stats = {
     total_capacity: float;
+    occupancy: float;
+    minor_share: float;
     major_share: float;
     minor: Subcache.stats;
     major: Subcache.stats;
@@ -410,18 +494,26 @@ module Make (Param: Param): (Cache with type key = Param.t) = struct
   [@@deriving show { with_path = false }]
 
   let short_stats (cache : _ t) : short_stats =
+    let minor = Subcache.short_stats cache.minor in
+    let major = Subcache.short_stats cache.major in
     {
       total_capacity = cache.total_capacity;
+      occupancy = minor.occupancy +. major.occupancy;
+      minor_share = 1. -. cache.major_share;
       major_share = cache.major_share;
-      minor = Subcache.short_stats cache.minor;
-      major = Subcache.short_stats cache.major;
+      minor;
+      major;
     }
 
   let stats (cache : _ t) : stats =
+    let minor = Subcache.stats cache.minor in
+    let major = Subcache.stats cache.major in
     {
       total_capacity = cache.total_capacity;
+      occupancy = minor.short_stats.occupancy +. major.short_stats.occupancy;
+      minor_share = 1. -. cache.major_share;
       major_share = cache.major_share;
-      minor = Subcache.stats cache.minor;
-      major = Subcache.stats cache.major;
+      minor;
+      major;
     }
 end
